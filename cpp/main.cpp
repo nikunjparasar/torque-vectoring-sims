@@ -1,6 +1,7 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
-#include <GL/glut.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <cmath>
 #include <sstream>
@@ -24,15 +25,15 @@ struct Car {
     float COMHeight;          // Height of the center of mass (m)
     float rollStiffness;      // Roll stiffness (Nm/rad)
 } car = {
-    0.0f, 0.5f, 0.0f,          // x, y, z
-    0.0f,                       // rotation
-    0.0f,                       // velocity
-    0.0f,                       // acceleration
-    1500.0f,                    // mass
-    2.5f,                       // wheelbase
-    1.6f,                       // trackWidth
-    0.5f,                       // COMHeight
-    150000.0f                   // rollStiffness
+    0.0f, 0.5f, 0.0f,          // x, y, z (Adjusted y to 0.5f)
+    0.0f,                      // rotation
+    0.0f,                      // velocity
+    0.0f,                      // acceleration
+    1500.0f,                   // mass
+    2.5f,                      // wheelbase
+    1.6f,                      // trackWidth
+    0.5f,                      // COMHeight
+    150000.0f                  // rollStiffness
 };
 
 // Movement parameters
@@ -103,6 +104,22 @@ void processInput(GLFWwindow *window) {
         if (car.rotation >= 360.0f) car.rotation -= 360.0f;
         if (car.rotation < 0.0f) car.rotation += 360.0f;
     }
+}
+
+// Function to set up basic lighting
+void setupLighting() {
+    glEnable(GL_LIGHTING);
+    glEnable(GL_LIGHT0);
+
+    GLfloat light_position[] = { 5.0f, 5.0f, 5.0f, 1.0f };
+    GLfloat light_ambient[] = { 0.2f, 0.2f, 0.2f, 1.0f };
+    GLfloat light_diffuse[] = { 0.8f, 0.8f, 0.8f, 1.0f };
+    GLfloat light_specular[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+    glLightfv(GL_LIGHT0, GL_POSITION, light_position);
+    glLightfv(GL_LIGHT0, GL_AMBIENT, light_ambient);
+    glLightfv(GL_LIGHT0, GL_DIFFUSE, light_diffuse);
+    glLightfv(GL_LIGHT0, GL_SPECULAR, light_specular);
 }
 
 // Function to draw a simple cube centered at the origin
@@ -215,15 +232,6 @@ void drawNormalLoadArrows(float frontLeftLoad, float frontRightLoad, float rearL
     drawArrow(rightX, 0.5f, rearZ, rearRightLoad);
 }
 
-// Function to render text on the screen
-void renderText(float x, float y, void *font, const char* string) {
-    glRasterPos2f(x, y);
-    while (*string) {
-        glutBitmapCharacter(font, *string);
-        ++string;
-    }
-}
-
 int main() {
     // Initialize GLFW
     if (!glfwInit()) {
@@ -231,9 +239,10 @@ int main() {
         return -1;
     }
 
-    // Set OpenGL version (optional, depends on your system)
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
+    // Remove OpenGL version hints to use default (compatibility profile)
+    // glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    // glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    // glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
     // Create a windowed mode window and its OpenGL context
     GLFWwindow* window = glfwCreateWindow(1280, 720, "3D Car Controller with Realistic Physics", NULL, NULL);
@@ -253,21 +262,18 @@ int main() {
         return -1;
     }
 
-    // Initialize GLUT for text rendering
-    int argc = 0;
-    char *argv[] = { (char*)"" };
-    glutInit(&argc, argv);
+    // Output OpenGL version
+    std::cout << "OpenGL version: " << glGetString(GL_VERSION) << std::endl;
+    std::cout << "GLSL version: " << glGetString(GL_SHADING_LANGUAGE_VERSION) << std::endl;
 
     // Enable depth testing for proper 3D rendering
     glEnable(GL_DEPTH_TEST);
 
-    // Set up the projection matrix
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    gluPerspective(45.0, 1280.0 / 720.0, 0.1, 1000.0);
+    // Set a clear color
+    glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
 
-    // Switch back to modelview matrix
-    glMatrixMode(GL_MODELVIEW);
+    // Set up basic lighting
+    setupLighting();
 
     // Main loop
     while (!glfwWindowShouldClose(window)) {
@@ -288,7 +294,7 @@ int main() {
         float a_lat = car.velocity * car.velocity * tan(steeringAngle) / car.wheelbase;
 
         // Calculate load transfer due to lateral acceleration
-        float deltaFz = (car.mass * a_lat * car.COMHeight) / car.trackWidth; // Total lateral load transfer
+        float deltaFz = (car.mass * a_lat * car.COMHeight) / car.trackWidth;
 
         // Roll angle calculation
         float rollAngle = (car.mass * a_lat * car.COMHeight) / car.rollStiffness; // Roll angle in radians
@@ -304,23 +310,33 @@ int main() {
 
         // Render here
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glLoadIdentity();
 
         // Set up the camera (following the car from behind)
-        gluLookAt(
-            car.x - 10.0f * sinf(rad), 5.0f, car.z - 10.0f * cosf(rad), // Eye position
-            car.x, car.y, car.z,                                         // Look at car's position
-            0.0, 1.0, 0.0                                                // Up vector
-        );
+        glm::vec3 eyePos = glm::vec3(car.x - 8.0f * sinf(rad), 5.0f, car.z - 8.0f * cosf(rad));
+        glm::vec3 centerPos = glm::vec3(car.x, car.y, car.z);
+        glm::vec3 upVec = glm::vec3(0.0f, 1.0f, 0.0f);
+        glm::mat4 view = glm::lookAt(eyePos, centerPos, upVec);
+
+        // Set up the projection matrix
+        glm::mat4 projection = glm::perspective(glm::radians(60.0f), 1280.0f / 720.0f, 0.1f, 1000.0f);
+
+        // Load the projection and view matrices
+        glMatrixMode(GL_PROJECTION);
+        glLoadIdentity();
+        glLoadMatrixf(&projection[0][0]);
+
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+        glLoadMatrixf(&view[0][0]);
 
         // Draw the ground plane (a large grid)
         glColor3f(0.3f, 0.3f, 0.3f);
         glBegin(GL_LINES);
         for (int i = -100; i <= 100; i++) {
-            glVertex3f(i, 0, -100);
-            glVertex3f(i, 0,  100);
-            glVertex3f(-100, 0, i);
-            glVertex3f( 100, 0, i);
+            glVertex3f((float)i, 0.0f, -100.0f);
+            glVertex3f((float)i, 0.0f,  100.0f);
+            glVertex3f(-100.0f, 0.0f, (float)i);
+            glVertex3f( 100.0f, 0.0f, (float)i);
         }
         glEnd();
 
@@ -336,75 +352,22 @@ int main() {
         glScalef(2.0f, 1.0f, 4.0f); // Scale the cube to represent a car
         drawCube();
 
+        glPopMatrix();
+
         // Draw the direction arrow
+        glPushMatrix();
+        glTranslatef(car.x, car.y, car.z);
+        glRotatef(car.rotation, 0.0f, 1.0f, 0.0f);
         glScalef(0.5f, 0.5f, 0.5f); // Adjust scale for the arrow
         drawDirectionArrow();
+        glPopMatrix();
 
         // Draw normal load arrows at each tire
-        glScalef(2.0f, 2.0f, 2.0f); // Reset scale
+        glPushMatrix();
+        glTranslatef(car.x, car.y, car.z);
+        glRotatef(car.rotation, 0.0f, 1.0f, 0.0f);
         drawNormalLoadArrows(frontLeftLoad, frontRightLoad, rearLeftLoad, rearRightLoad,
                              car.wheelbase, car.trackWidth);
-
-        glPopMatrix();
-
-        // Set up orthographic projection for 2D text rendering
-        glMatrixMode(GL_PROJECTION);
-        glPushMatrix();
-        glLoadIdentity();
-        gluOrtho2D(0, 1280, 0, 720);
-        glMatrixMode(GL_MODELVIEW);
-        glPushMatrix();
-        glLoadIdentity();
-
-        // Disable depth test and lighting for text rendering
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_LIGHTING);
-
-        // Render text
-        glColor3f(1.0f, 1.0f, 1.0f);
-        std::stringstream ss;
-        ss << std::fixed << std::setprecision(2);
-        ss << "Speed: " << car.velocity << " m/s";
-        renderText(10, 700, GLUT_BITMAP_HELVETICA_18, ss.str().c_str());
-
-        ss.str("");
-        ss << "Acceleration: " << car.acceleration << " m/s^2";
-        renderText(10, 680, GLUT_BITMAP_HELVETICA_18, ss.str().c_str());
-
-        ss.str("");
-        ss << "Lateral Acceleration: " << a_lat << " m/s^2";
-        renderText(10, 660, GLUT_BITMAP_HELVETICA_18, ss.str().c_str());
-
-        ss.str("");
-        ss << "Steering Angle: " << steeringAngle * (180.0f / PI) << " degrees";
-        renderText(10, 640, GLUT_BITMAP_HELVETICA_18, ss.str().c_str());
-
-        ss.str("");
-        ss << "Roll Angle: " << rollAngle * (180.0f / PI) << " degrees";
-        renderText(10, 620, GLUT_BITMAP_HELVETICA_18, ss.str().c_str());
-
-        ss.str("");
-        ss << "Front Left Load: " << frontLeftLoad << " N";
-        renderText(10, 600, GLUT_BITMAP_HELVETICA_18, ss.str().c_str());
-
-        ss.str("");
-        ss << "Front Right Load: " << frontRightLoad << " N";
-        renderText(10, 580, GLUT_BITMAP_HELVETICA_18, ss.str().c_str());
-
-        ss.str("");
-        ss << "Rear Left Load: " << rearLeftLoad << " N";
-        renderText(10, 560, GLUT_BITMAP_HELVETICA_18, ss.str().c_str());
-
-        ss.str("");
-        ss << "Rear Right Load: " << rearRightLoad << " N";
-        renderText(10, 540, GLUT_BITMAP_HELVETICA_18, ss.str().c_str());
-
-        // Restore projection and modelview matrices
-        glEnable(GL_DEPTH_TEST);
-        glEnable(GL_LIGHTING);
-        glMatrixMode(GL_PROJECTION);
-        glPopMatrix();
-        glMatrixMode(GL_MODELVIEW);
         glPopMatrix();
 
         // Swap front and back buffers

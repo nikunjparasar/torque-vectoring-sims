@@ -5,6 +5,7 @@ g++ main.cpp -o main \
 -I/opt/homebrew/Cellar/glew/2.2.0_1/include \
 -I/opt/homebrew/Cellar/glfw/3.4/include \
 -I/opt/homebrew/include \
+-I/opt/homebrew/include/glm \
 -L/opt/homebrew/Cellar/glew/2.2.0_1/lib \
 -L/opt/homebrew/Cellar/glfw/3.4/lib \
 -L/opt/homebrew/lib \
