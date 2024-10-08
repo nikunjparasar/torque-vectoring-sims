@@ -1,3 +1,5 @@
+// main.cpp
+
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -7,102 +9,114 @@
 #include <sstream>
 #include <iomanip>
 
+// Include stb_easy_font.h for text rendering
+// Download from: https://github.com/nothings/stb/blob/master/stb_easy_font.h
+#define STB_EASY_FONT_IMPLEMENTATION
+#include "stb_easy_font.h"
+
 // Constants
 const float PI = 3.14159265358979323846f;
+const float DEG2RAD = PI / 180.0f;
+const float RAD2DEG = 180.0f / PI;
 const float GRAVITY = 9.81f;
 
 // Define the initial position and orientation of the car
 struct Car {
-    float x, y, z;            // Position
-    float rotation;           // Yaw rotation in degrees
-    float velocity;           // Current speed of the car (m/s)
-    float acceleration;       // Current acceleration (m/s^2)
+    // Position and orientation
+    float x, y, z;            // Position in world coordinates
+    float heading;            // Heading angle (radians)
+    float velocity;           // Speed (m/s)
+    float acceleration;       // Acceleration along the car's axis (m/s^2)
+    float steerAngle;         // Steering angle (radians)
+    float yawRate;            // Yaw rate (radians per second)
 
     // Vehicle parameters
     float mass;               // Mass of the car (kg)
+    float length;             // Total length of the car (m)
+    float width;              // Width of the car (m)
     float wheelbase;          // Distance between front and rear axles (m)
-    float trackWidth;         // Distance between left and right wheels (m)
-    float COMHeight;          // Height of the center of mass (m)
-    float rollStiffness;      // Roll stiffness (Nm/rad)
+    float lf;                 // Distance from CG to front axle (m)
+    float lr;                 // Distance from CG to rear axle (m)
+    float Iz;                 // Yaw moment of inertia (kg·m²)
+    float Cf;                 // Cornering stiffness front (N/rad)
+    float Cr;                 // Cornering stiffness rear (N/rad)
+    float maxSteer;           // Maximum steering angle (radians)
+    float maxAcceleration;    // Maximum acceleration (m/s²)
+    float maxDeceleration;    // Maximum deceleration (m/s²)
+    float h_cg;               // Height of the center of gravity (m)
+    float trackWidth;         // Width between left and right wheels (m)
 } car = {
-    0.0f, 0.5f, 0.0f,          // x, y, z (Adjusted y to 0.5f)
-    0.0f,                      // rotation
-    0.0f,                      // velocity
-    0.0f,                      // acceleration
-    1500.0f,                   // mass
-    2.5f,                      // wheelbase
-    1.6f,                      // trackWidth
-    0.5f,                      // COMHeight
-    150000.0f                  // rollStiffness
-};
+    // Initial position and orientation
+    0.0f, 0.5f, 0.0f,         // x, y, z
+    0.0f,                     // heading
+    0.0f,                     // velocity
+    0.0f,                     // acceleration
+    0.0f,                     // steerAngle
+    0.0f,                     // yawRate
 
-// Movement parameters
-const float MAX_SPEED = 30.0f;          // Maximum speed units per second
-const float ACCELERATION_RATE = 5.0f;   // Acceleration units per second squared
-const float BRAKE_RATE = 10.0f;         // Braking units per second squared
-const float ROTATE_SPEED = 60.0f;       // Degrees per second
+    // Vehicle parameters
+    1500.0f,                  // mass (kg)
+    4.5f,                     // length (m)
+    1.8f,                     // width (m)
+    2.5f,                     // wheelbase (m)
+    1.25f,                    // lf (m)
+    1.25f,                    // lr (m)
+    2250.0f,                  // Iz (kg·m²)
+    80000.0f,                 // Cf (N/rad)
+    80000.0f,                 // Cr (N/rad)
+    30.0f * DEG2RAD,          // maxSteer (radians)
+    5.0f,                     // maxAcceleration (m/s²)
+    -10.0f,                   // maxDeceleration (m/s²)
+    0.55f,                    // h_cg (m)
+    1.6f                      // trackWidth (m)
+};
 
 // Timing
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
-// Variables for lateral dynamics
-float steeringAngle = 0.0f; // Steering angle in radians
-
 // Function to process input
-void processInput(GLFWwindow *window) {
+void processInput(GLFWwindow* window) {
     // Close window on ESC
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
 
+    // Handle steering
+    float steerInput = 0.0f;
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+        steerInput = 1.0f;
+    }
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+        steerInput = -1.0f;
+    }
+
+    // Update steering angle
+    float steerSpeed = 1.5f; // Steering speed (radians per second)
+    car.steerAngle += steerSpeed * steerInput * deltaTime;
+    if (car.steerAngle > car.maxSteer)
+        car.steerAngle = car.maxSteer;
+    if (car.steerAngle < -car.maxSteer)
+        car.steerAngle = -car.maxSteer;
+
     // Handle acceleration and braking
+    float accelerationInput = 0.0f;
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-        car.acceleration = ACCELERATION_RATE;
+        accelerationInput = 1.0f;
     }
-    else if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-        car.acceleration = -BRAKE_RATE;
-    }
-    else {
-        // Apply friction when no acceleration/braking
-        if (car.velocity > 0.0f) {
-            car.acceleration = -5.0f; // Friction deceleration
-            if (car.velocity + car.acceleration * deltaTime < 0.0f)
-                car.acceleration = -car.velocity / deltaTime;
-        }
-        else if (car.velocity < 0.0f) {
-            car.acceleration = 5.0f; // Friction deceleration
-            if (car.velocity + car.acceleration * deltaTime > 0.0f)
-                car.acceleration = -car.velocity / deltaTime;
-        }
-        else {
-            car.acceleration = 0.0f;
-        }
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+        accelerationInput = -1.0f;
     }
 
-    // Update velocity with acceleration
-    car.velocity += car.acceleration * deltaTime;
-    // Clamp velocity to max speed
-    if (car.velocity > MAX_SPEED)
-        car.velocity = MAX_SPEED;
-    if (car.velocity < -MAX_SPEED / 2) // Reverse speed is typically lower
-        car.velocity = -MAX_SPEED / 2;
-
-    // Handle rotation only when the car is moving
-    if (fabs(car.velocity) > 0.1f) { // Threshold to prevent jitter
-        // Calculate steering angle
-        steeringAngle = 0.0f;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-            steeringAngle = 15.0f * (PI / 180.0f); // 15 degrees to radians
-        }
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-            steeringAngle = -15.0f * (PI / 180.0f); // -15 degrees to radians
-        }
-
-        // Update car rotation based on steering and velocity
-        float angularVelocity = (car.velocity / car.wheelbase) * tan(steeringAngle);
-        car.rotation += angularVelocity * deltaTime * (180.0f / PI); // Convert to degrees
-        if (car.rotation >= 360.0f) car.rotation -= 360.0f;
-        if (car.rotation < 0.0f) car.rotation += 360.0f;
+    // Update acceleration
+    if (accelerationInput > 0.0f) {
+        car.acceleration = car.maxAcceleration * accelerationInput;
+    } else if (accelerationInput < 0.0f) {
+        car.acceleration = -car.maxDeceleration * accelerationInput;
+    } else {
+        // Apply rolling resistance and aerodynamic drag when no input
+        float rollingResistance = -0.015f * car.velocity;
+        float aerodynamicDrag = -0.001f * car.velocity * fabsf(car.velocity);
+        car.acceleration = rollingResistance + aerodynamicDrag;
     }
 }
 
@@ -129,16 +143,16 @@ void drawCube() {
     // Front face (z = 1.0f)
     glColor3f(0.8f, 0.0f, 0.0f);     // Dark Red
     glVertex3f(-0.5f, -0.5f,  0.5f);
-    glVertex3f( 0.5f, -0.5f,  0.5f);
-    glVertex3f( 0.5f,  0.5f,  0.5f);
+    glVertex3f(0.5f, -0.5f,  0.5f);
+    glVertex3f(0.5f,  0.5f,  0.5f);
     glVertex3f(-0.5f,  0.5f,  0.5f);
 
     // Back face (z = -1.0f)
     glColor3f(0.8f, 0.0f, 0.0f);     // Dark Red
     glVertex3f(-0.5f, -0.5f, -0.5f);
     glVertex3f(-0.5f,  0.5f, -0.5f);
-    glVertex3f( 0.5f,  0.5f, -0.5f);
-    glVertex3f( 0.5f, -0.5f, -0.5f);
+    glVertex3f(0.5f,  0.5f, -0.5f);
+    glVertex3f(0.5f, -0.5f, -0.5f);
 
     // Left face (x = -1.0f)
     glColor3f(0.8f, 0.0f, 0.0f);     // Dark Red
@@ -158,44 +172,25 @@ void drawCube() {
     glColor3f(0.9f, 0.1f, 0.1f);     // Lighter Red
     glVertex3f(-0.5f, 0.5f, -0.5f);
     glVertex3f(-0.5f, 0.5f,  0.5f);
-    glVertex3f( 0.5f, 0.5f,  0.5f);
-    glVertex3f( 0.5f, 0.5f, -0.5f);
+    glVertex3f(0.5f, 0.5f,  0.5f);
+    glVertex3f(0.5f, 0.5f, -0.5f);
 
     // Bottom face (y = -1.0f)
     glColor3f(0.6f, 0.0f, 0.0f);     // Darker Red
     glVertex3f(-0.5f, -0.5f, -0.5f);
-    glVertex3f( 0.5f, -0.5f, -0.5f);
-    glVertex3f( 0.5f, -0.5f,  0.5f);
+    glVertex3f(0.5f, -0.5f, -0.5f);
+    glVertex3f(0.5f, -0.5f,  0.5f);
     glVertex3f(-0.5f, -0.5f,  0.5f);
 
     glEnd();
 }
 
-// Function to draw an arrow indicating movement direction
-void drawDirectionArrow() {
-    glLineWidth(2.0f);
-    glBegin(GL_LINES);
-    glColor3f(1.0f, 1.0f, 0.0f); // Yellow color for the arrow
-
-    // Arrow base (from the center front)
-    glVertex3f(0.0f, 0.5f, 2.0f); // Starting point at front center of the car
-    glVertex3f(0.0f, 0.5f, 3.5f); // End point forward
-
-    // Arrowhead
-    glVertex3f(0.0f, 0.5f, 3.5f);
-    glVertex3f(-0.2f, 0.5f, 3.3f);
-
-    glVertex3f(0.0f, 0.5f, 3.5f);
-    glVertex3f(0.2f, 0.5f, 3.3f);
-
-    glEnd();
-}
-
-// Function to draw normal load arrows at each tire
+// Function to draw an arrow representing normal load
 void drawArrow(float x, float y, float z, float load) {
     float scale = 0.0005f;
     float arrowHeight = load * scale;
-    glLineWidth(5.0f);
+
+    glLineWidth(3.0f);
     glBegin(GL_LINES);
     glColor3f(0.0f, 1.0f, 1.0f); // Cyan color for load arrows
     glVertex3f(x, y, z);
@@ -211,27 +206,41 @@ void drawArrow(float x, float y, float z, float load) {
     glEnd();
 }
 
-void drawNormalLoadArrows(float frontLeftLoad, float frontRightLoad, float rearLeftLoad, float rearRightLoad,
-                          float wheelbase, float trackWidth) {
-    // Positions of the tires relative to the car's center
-    float frontZ = wheelbase / 2.0f;
-    float rearZ = -wheelbase / 2.0f;
-    float leftX = trackWidth / 2.0f;
-    float rightX = -trackWidth / 2.0f;
+// Function to draw normal load arrows at front and rear axles
+void drawNormalLoadArrows(float frontLoad, float rearLoad) {
+    // Positions of the axles relative to the car's center
+    float frontZ = car.lf;
+    float rearZ = -car.lr;
+    float centerX = 0.0f;
 
-    // Front-Left Tire
-    drawArrow(leftX, 0.5f, frontZ, frontLeftLoad);
+    // Front Axle
+    drawArrow(centerX, 0.5f, frontZ, frontLoad);
 
-    // Front-Right Tire
-    drawArrow(rightX, 0.5f, frontZ, frontRightLoad);
-
-    // Rear-Left Tire
-    drawArrow(leftX, 0.5f, rearZ, rearLeftLoad);
-
-    // Rear-Right Tire
-    drawArrow(rightX, 0.5f, rearZ, rearRightLoad);
+    // Rear Axle
+    drawArrow(centerX, 0.5f, rearZ, rearLoad);
 }
 
+// Function to render text on the screen
+void renderText(float x, float y, const char* text) {
+    char buffer[99999]; // ~500 chars
+    int num_quads;
+
+    num_quads = stb_easy_font_print(x, y, (char*)text, NULL, buffer, sizeof(buffer));
+
+    glPushMatrix();
+    glLoadIdentity();
+
+    glDisable(GL_TEXTURE_2D);
+    glColor3f(1, 1, 1); // White color
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glVertexPointer(2, GL_FLOAT, 16, buffer);
+    glDrawArrays(GL_QUADS, 0, num_quads * 4);
+    glDisableClientState(GL_VERTEX_ARRAY);
+
+    glPopMatrix();
+}
+
+// Main function
 int main() {
     // Initialize GLFW
     if (!glfwInit()) {
@@ -275,6 +284,10 @@ int main() {
     // Set up basic lighting
     setupLighting();
 
+    // Set up 2D orthographic projection for text rendering
+    int width, height;
+    glfwGetWindowSize(window, &width, &height);
+
     // Main loop
     while (!glfwWindowShouldClose(window)) {
         // Calculate delta time
@@ -285,40 +298,61 @@ int main() {
         // Process input
         processInput(window);
 
-        // Update car position based on velocity and direction
-        float rad = car.rotation * PI / 180.0f;
-        car.x += car.velocity * deltaTime * sinf(rad);
-        car.z += car.velocity * deltaTime * cosf(rad); // Forward along positive Z
+        // Update vehicle dynamics using the bicycle model
+        float beta = 0.0f; // Slip angle at vehicle center of gravity
+        if (fabsf(car.velocity) > 0.1f) {
+            beta = atan2f((car.lr * tanf(car.steerAngle)) / (car.lf + car.lr), 1.0f);
+        }
 
-        // Calculate lateral acceleration
-        float a_lat = car.velocity * car.velocity * tan(steeringAngle) / car.wheelbase;
+        // Lateral acceleration
+        float a_lat = (car.velocity * car.velocity * tanf(car.steerAngle)) / car.wheelbase;
 
-        // Calculate load transfer due to lateral acceleration
-        float deltaFz = (car.mass * a_lat * car.COMHeight) / car.trackWidth;
+        // Longitudinal acceleration is car.acceleration
 
-        // Roll angle calculation
-        float rollAngle = (car.mass * a_lat * car.COMHeight) / car.rollStiffness; // Roll angle in radians
+        // Calculate load transfers
+        // Static normal loads
+        float Fz_front_static = (car.lr / car.wheelbase) * car.mass * GRAVITY;
+        float Fz_rear_static = (car.lf / car.wheelbase) * car.mass * GRAVITY;
 
-        // Static normal load per tire (assuming equal weight distribution)
-        float normalLoadPerTire = (car.mass * GRAVITY) / 4.0f;
+        // Longitudinal load transfer
+        float deltaFz_long = (car.h_cg / car.wheelbase) * car.mass * car.acceleration;
 
-        // Adjust normal loads on each tire due to lateral load transfer
-        float frontLeftLoad = normalLoadPerTire - deltaFz / 2.0f;
-        float frontRightLoad = normalLoadPerTire + deltaFz / 2.0f;
-        float rearLeftLoad = normalLoadPerTire - deltaFz / 2.0f;
-        float rearRightLoad = normalLoadPerTire + deltaFz / 2.0f;
+        // Lateral load transfer (assuming it equally affects front and rear axles)
+        float deltaFz_lat = (car.h_cg / car.trackWidth) * car.mass * a_lat;
+
+        // Total normal loads
+        float Fz_front = Fz_front_static - deltaFz_long - deltaFz_lat / 2.0f;
+        float Fz_rear = Fz_rear_static + deltaFz_long - deltaFz_lat / 2.0f;
+
+        // Update position and heading
+        float velocityX = car.velocity * cosf(car.heading + beta);
+        float velocityZ = car.velocity * sinf(car.heading + beta);
+
+        car.x += velocityX * deltaTime;
+        car.z += velocityZ * deltaTime;
+
+        car.heading += (car.velocity / car.wheelbase) * tanf(car.steerAngle) * deltaTime;
+
+        // Update velocity
+        car.velocity += car.acceleration * deltaTime;
+
+        // Limit speed
+        if (car.velocity > 55.0f)
+            car.velocity = 55.0f;
+        if (car.velocity < -20.0f)
+            car.velocity = -20.0f;
 
         // Render here
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         // Set up the camera (following the car from behind)
-        glm::vec3 eyePos = glm::vec3(car.x - 8.0f * sinf(rad), 5.0f, car.z - 8.0f * cosf(rad));
+        glm::vec3 eyePos = glm::vec3(car.x - 8.0f * cosf(car.heading), 5.0f, car.z - 8.0f * sinf(car.heading));
         glm::vec3 centerPos = glm::vec3(car.x, car.y, car.z);
         glm::vec3 upVec = glm::vec3(0.0f, 1.0f, 0.0f);
         glm::mat4 view = glm::lookAt(eyePos, centerPos, upVec);
 
         // Set up the projection matrix
-        glm::mat4 projection = glm::perspective(glm::radians(60.0f), 1280.0f / 720.0f, 0.1f, 1000.0f);
+        glm::mat4 projection = glm::perspective(glm::radians(60.0f), (float)width / height, 0.1f, 1000.0f);
 
         // Load the projection and view matrices
         glMatrixMode(GL_PROJECTION);
@@ -343,31 +377,54 @@ int main() {
         // Apply car transformations
         glPushMatrix();
         glTranslatef(car.x, car.y, car.z);
-        glRotatef(car.rotation, 0.0f, 1.0f, 0.0f);
-
-        // Apply roll rotation around the car's longitudinal axis
-        glRotatef(rollAngle * (180.0f / PI), 0.0f, 0.0f, 1.0f);
+        glRotatef(car.heading * RAD2DEG, 0.0f, 1.0f, 0.0f);
 
         // Draw the car
-        glScalef(2.0f, 1.0f, 4.0f); // Scale the cube to represent a car
+        glScalef(car.length, 1.0f, car.width); // Scale the cube to represent a car
         drawCube();
 
         glPopMatrix();
 
-        // Draw the direction arrow
+        // Draw normal load arrows at front and rear axles
         glPushMatrix();
         glTranslatef(car.x, car.y, car.z);
-        glRotatef(car.rotation, 0.0f, 1.0f, 0.0f);
-        glScalef(0.5f, 0.5f, 0.5f); // Adjust scale for the arrow
-        drawDirectionArrow();
+        glRotatef(car.heading * RAD2DEG, 0.0f, 1.0f, 0.0f);
+        drawNormalLoadArrows(Fz_front, Fz_rear);
         glPopMatrix();
 
-        // Draw normal load arrows at each tire
+        // Render text (switch to orthographic projection)
+        glMatrixMode(GL_PROJECTION);
         glPushMatrix();
-        glTranslatef(car.x, car.y, car.z);
-        glRotatef(car.rotation, 0.0f, 1.0f, 0.0f);
-        drawNormalLoadArrows(frontLeftLoad, frontRightLoad, rearLeftLoad, rearRightLoad,
-                             car.wheelbase, car.trackWidth);
+        glLoadIdentity();
+        glOrtho(0, width, height, 0, -1, 1);
+
+        glMatrixMode(GL_MODELVIEW);
+        glPushMatrix();
+        glLoadIdentity();
+
+        // Disable lighting for text rendering
+        glDisable(GL_LIGHTING);
+
+        // Prepare text content
+        std::stringstream ss;
+        ss << std::fixed << std::setprecision(2);
+        ss << "Speed: " << car.velocity << " m/s\n";
+        ss << "Acceleration: " << car.acceleration << " m/s^2\n";
+        ss << "Steering Angle: " << car.steerAngle * RAD2DEG << " degrees\n";
+        ss << "Heading: " << car.heading * RAD2DEG << " degrees\n";
+        ss << "Front Normal Load: " << Fz_front << " N\n";
+        ss << "Rear Normal Load: " << Fz_rear << " N\n";
+
+        // Render text
+        renderText(10.0f, 20.0f, ss.str().c_str());
+
+        // Re-enable lighting
+        glEnable(GL_LIGHTING);
+
+        // Restore previous projection and modelview matrices
+        glMatrixMode(GL_MODELVIEW);
+        glPopMatrix();
+        glMatrixMode(GL_PROJECTION);
         glPopMatrix();
 
         // Swap front and back buffers
@@ -375,6 +432,9 @@ int main() {
 
         // Poll for and process events
         glfwPollEvents();
+
+        // Update window size (in case of window resize)
+        glfwGetWindowSize(window, &width, &height);
     }
 
     glfwTerminate();
